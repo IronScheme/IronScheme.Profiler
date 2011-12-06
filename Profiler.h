@@ -33,6 +33,7 @@ typedef struct FunctionInfo
   __int32 callcount;
   __int64 inctime;
   __int64 extime;
+  ThreadID tid;
 
 } FUNCTIONINFO;
 
@@ -43,6 +44,7 @@ typedef struct FunctionSample
   __int64 inctime;
   __int64 lastextime;
   __int64 lastinctime;
+  ThreadID tid;
 
 } FUNCTIONSAMPLE;
 
@@ -131,7 +133,7 @@ private:
   LARGE_INTEGER init_time;
 	// handle and filename of log file
 
-  STACK* m_stack;
+  std::map<ThreadID, STACK*> m_stackMap;
 
 	// gets the full method name given a function ID
 	HRESULT GetFullMethodName(FunctionID functionId, LPWSTR wszMethod, int cMethod );

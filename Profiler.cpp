@@ -228,6 +228,7 @@ UINT_PTR CProfiler::MapFunction(FunctionID functionID)
         fi->extime = 0;
         fi->inctime = 0;
         fi->name = wcsdup(methname);
+		fi->tid = tid;
 
         m_functionMap.insert(std::pair<FunctionID, FUNCTIONINFO*>(functionID, fi));
 
@@ -312,71 +313,129 @@ __forceinline BOOL IsInStack(STACK* s, FUNCTIONINFO* fi)
 // our real handler for FunctionEnter notification
 __forceinline void CProfiler::Enter(FunctionID functionID, FUNCTIONINFO* fi)
 {
-  LARGE_INTEGER t;
-  QueryPerformanceCounter(&t);
+	ThreadID tid;
+	if (CORPROF_E_NOT_MANAGED_THREAD != m_pICorProfilerInfo->GetCurrentThreadID(&tid))
+	{
+		STACK* m_stack = NULL;
 
-  __int64 time = t.QuadPart - init_time.QuadPart;
+		std::map<ThreadID, STACK*>::iterator iter = m_stackMap.find(tid);
+		if (iter == m_stackMap.end())
+		{
+			m_stack = MakeStack(16384);
+			m_stackMap.insert(std::pair<ThreadID, STACK*>(tid, m_stack));
+		}
+		else
+		{
+			m_stack = iter->second;
+		}
+		
+		LARGE_INTEGER t;
+		QueryPerformanceCounter(&t);
 
-  if (!IsEmpty(m_stack))
-  {
-    FUNCTIONSAMPLE* prev = Peek(m_stack);
-    prev->extime += (time - prev->lastextime);
-  }
+		__int64 time = t.QuadPart - init_time.QuadPart;
 
-  fi->callcount++;
+		if (!IsEmpty(m_stack))
+		{
+			FUNCTIONSAMPLE* prev = Peek(m_stack);
+			prev->extime += (time - prev->lastextime);
+		}
 
-  FUNCTIONSAMPLE fs = MakeSample(fi, time);
-  Push(m_stack, fs);
+		fi->callcount++;
+
+		FUNCTIONSAMPLE fs = MakeSample(fi, time);
+		fs.tid = tid;
+		Push(m_stack, fs);
+	}
 }
 
 // our real handler for FunctionLeave notification
 __forceinline void CProfiler::Leave(FunctionID functionID, FUNCTIONINFO* fi)
 {
-  LARGE_INTEGER t;
-  QueryPerformanceCounter(&t);
+	ThreadID tid;
+	if (CORPROF_E_NOT_MANAGED_THREAD != m_pICorProfilerInfo->GetCurrentThreadID(&tid))
+	{
+		STACK* m_stack = NULL;
 
-  __int64 time = t.QuadPart - init_time.QuadPart;
+		std::map<ThreadID, STACK*>::iterator iter = m_stackMap.find(tid);
+		if (iter == m_stackMap.end())
+		{
+			m_stack = MakeStack(16384);
+			m_stackMap.insert(std::pair<ThreadID, STACK*>(tid, m_stack));
+		}
+		else
+		{
+			m_stack = iter->second;
+		}
 
-  FUNCTIONSAMPLE* leave = Pop(m_stack);
-  leave->extime += (time - leave->lastextime);
-  leave->inctime += (time - leave->lastinctime);
-  leave->info->extime += leave->extime;
+		LARGE_INTEGER t;
+		QueryPerformanceCounter(&t);
 
-  if (!IsInStack(m_stack, leave->info))
-  {
-    leave->info->inctime += leave->inctime;
-  }
+		__int64 time = t.QuadPart - init_time.QuadPart;
 
-  if (!IsEmpty(m_stack))
-  {
-    FUNCTIONSAMPLE* parent = Peek(m_stack);
-    parent->lastextime = time;
-  }
+		FUNCTIONSAMPLE* leave = Pop(m_stack);
+
+		assert(leave->info == fi);
+
+		leave->extime += (time - leave->lastextime);
+		leave->inctime += (time - leave->lastinctime);
+		leave->info->extime += leave->extime;
+
+		if (!IsInStack(m_stack, leave->info))
+		{
+		leave->info->inctime += leave->inctime;
+		}
+
+		if (!IsEmpty(m_stack))
+		{
+		FUNCTIONSAMPLE* parent = Peek(m_stack);
+		parent->lastextime = time;
+		}
+	}
 }
 
 // our real handler for the FunctionTailcall notification
 __forceinline void CProfiler::Tailcall(FunctionID functionID, FUNCTIONINFO* fi)
 {
-  LARGE_INTEGER t;
-  QueryPerformanceCounter(&t);
+	ThreadID tid;
+	if (CORPROF_E_NOT_MANAGED_THREAD != m_pICorProfilerInfo->GetCurrentThreadID(&tid))
+	{
+		STACK* m_stack = NULL;
 
-  __int64 time = t.QuadPart - init_time.QuadPart;
+		std::map<ThreadID, STACK*>::iterator iter = m_stackMap.find(tid);
+		if (iter == m_stackMap.end())
+		{
+			m_stack = MakeStack(16384);
+			m_stackMap.insert(std::pair<ThreadID, STACK*>(tid, m_stack));
+		}
+		else
+		{
+			m_stack = iter->second;
+		}
 
-  FUNCTIONSAMPLE* leave = Pop(m_stack);
-  leave->extime += (time - leave->lastextime);
-  leave->inctime += (time - leave->lastinctime);
-  leave->info->extime += leave->extime;
+		LARGE_INTEGER t;
+		QueryPerformanceCounter(&t);
 
-  if (!IsInStack(m_stack, leave->info))
-  {
-    leave->info->inctime += leave->inctime;
-  }
+		__int64 time = t.QuadPart - init_time.QuadPart;
 
-  if (!IsEmpty(m_stack))
-  {
-    FUNCTIONSAMPLE* parent = Peek(m_stack);
-    parent->lastextime = time;
-  }
+		FUNCTIONSAMPLE* leave = Pop(m_stack);
+
+		assert(leave->info == fi);
+
+		leave->extime += (time - leave->lastextime);
+		leave->inctime += (time - leave->lastinctime);
+		leave->info->extime += leave->extime;
+
+		if (!IsInStack(m_stack, leave->info))
+		{
+		leave->info->inctime += leave->inctime;
+		}
+
+		if (!IsEmpty(m_stack))
+		{
+		FUNCTIONSAMPLE* parent = Peek(m_stack);
+		parent->lastextime = time;
+		}
+	}
 }
 
 // ----  ICorProfilerCallback IMPLEMENTATION ------------------
@@ -384,11 +443,10 @@ __forceinline void CProfiler::Tailcall(FunctionID functionID, FUNCTIONINFO* fi)
 // called when the profiling object is created by the CLR
 STDMETHODIMP CProfiler::Initialize(IUnknown *pICorProfilerInfoUnk)
 {
-  //DebugBreak();
+	//	DebugBreak();
 	// set up our global access pointer
 	g_pICorProfilerCallback = this;
-  m_stack = MakeStack(16384);
-
+  
 	// get the ICorProfilerInfo interface
     HRESULT hr = pICorProfilerInfoUnk->QueryInterface(IID_ICorProfilerInfo, (LPVOID*)&m_pICorProfilerInfo);
     if (FAILED(hr))
@@ -441,7 +499,15 @@ STDMETHODIMP CProfiler::Initialize(IUnknown *pICorProfilerInfoUnk)
 // called when the profiler is being terminated by the CLR
 STDMETHODIMP CProfiler::Shutdown()
 {
-  FreeStack(m_stack);
+	std::map<ThreadID, STACK*>::iterator iter2 = m_stackMap.begin();
+	while (iter2 != m_stackMap.end())
+	{
+			
+		FreeStack(iter2->second);
+		iter2++;
+	}
+
+
 
   LARGE_INTEGER f;
   QueryPerformanceFrequency(&f);
@@ -458,13 +524,16 @@ STDMETHODIMP CProfiler::Shutdown()
   {
     FUNCTIONINFO* fi = iter->second;
 
-    fprintf(output, "%S\t%i\t%.2f\t%.2f\t%.4f\t%.4f\n",
-      fi->name,
-      fi->callcount,
-      fi->inctime / fz,
-      fi->extime / fz,
-      (fi->inctime / fz) / fi->callcount,
-      (fi->extime / fz)  / fi->callcount);
+	if (fi->callcount)
+	{
+		fprintf(output, "%S\t%i\t%.2f\t%.2f\t%.4f\t%.4f\n",
+		  fi->name,
+		  fi->callcount,
+		  fi->inctime / fz,
+		  fi->extime / fz,
+		  (fi->inctime / fz) / fi->callcount,
+		  (fi->extime / fz)  / fi->callcount);
+	}
 
     free(fi->name);
     free(fi);
